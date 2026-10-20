@@ -251,7 +251,8 @@ class Assistant:
         if not text:
             return
         mode = self.settings.get("answer_mode", "questions")
-        if not wants_reply(text, mode):
+        # typed text is always worth answering: the user chose those words
+        if source != "typed" and not wants_reply(text, mode):
             self.events.put({"t": "heard", "text": text, "answered": False})
             return
         self.events.put({"t": "heard", "text": text, "answered": True,
@@ -270,6 +271,16 @@ class Assistant:
             return
         try:
             self.events.put({"t": "thinking"})
+            try:
+                import agent as agent_mod
+            except Exception:
+                agent_mod = None
+            if agent_mod is not None:
+                # the agent loop answers with live PC context and may use
+                # tools (it emits the final 'answer' event itself)
+                agent_mod.run_agent(question, self.server, self.events,
+                                    self.settings)
+                return
             messages = [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": question},

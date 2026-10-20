@@ -133,6 +133,7 @@ class Dock(tk.Tk):
         self.setup_win = None
         self.dl_sink = None            # callable(label, done, total)
         self._drag = None
+        self._ask_id = None            # pending agent confirmation
 
         self.withdraw()
         self.title("ShhDock")
@@ -200,17 +201,23 @@ class Dock(tk.Tk):
                       padx=6)
         _hover(x, bg="#3a1d24")
         x.pack(side="right", pady=8)
+        self.handset_btn = None
         for label, cmd, tip in (
+                ("📞", self._toggle_call, "call listening"),
                 ("⚙", self._open_settings, "settings"),
                 ("🪟", self._open_hider, "hide windows"),
                 ("💬", self._toggle_panel, "answers")):
+            lit = label == "📞" and bool(self.settings.get("call_listen"))
             b = tk.Button(root, text=label, command=cmd, relief="flat", bd=0,
-                          bg=BG, fg=TEXT, activebackground=HOVER,
+                          bg=BG, fg=GREEN if lit else TEXT,
+                          activebackground=HOVER,
                           activeforeground=TEXT, font=FONT, cursor="hand2",
                           padx=6)
             _hover(b)
             b.pack(side="right", pady=8)
             self._tip(b, tip)
+            if label == "📞":
+                self.handset_btn = b
 
         root.bind("<Button-3>", lambda e: self._quit())
 
@@ -290,13 +297,40 @@ class Dock(tk.Tk):
                             lmargin2=18, spacing1=3)
         self.log.tag_config("shh", foreground=TEXT, lmargin1=2,
                             lmargin2=18, spacing1=7)
+        self.log.tag_config("them", foreground="#b48ead", lmargin1=2,
+                            lmargin2=34, spacing1=3)
+        self.log.tag_config("tool", foreground="#5c6474", lmargin1=2,
+                            lmargin2=22, spacing1=2)
         self.log.tag_config("meta", foreground="#5c6474", justify="center")
         self.log.tag_config("who_you", foreground="#6b7280")
         self.log.tag_config("who_shh", foreground=ACCENT)
+        self.log.tag_config("who_them", foreground="#7d6487")
+        self.log.tag_config("who_tool", foreground="#464d5c")
         self._log_empty_hint()
+
+        # agent confirmation bar (packed on demand, above the entry row)
+        self.ask_bar = tk.Frame(panel, bg="#2a2318", highlightthickness=1,
+                                highlightbackground=AMBER)
+        tk.Label(self.ask_bar, text="⚠", bg="#2a2318", fg=AMBER,
+                 font=FONT).pack(side="left", padx=(8, 4))
+        self.ask_label = tk.Label(self.ask_bar, text="", bg="#2a2318",
+                                  fg=TEXT, font=FONT_S, anchor="w")
+        self.ask_label.pack(side="left", fill="x", expand=True)
+        allow = _flat_button(self.ask_bar, "✓ Allow",
+                             lambda: self._resolve_ask(True))
+        allow.configure(bg=GREEN, fg="#0c1a10",
+                        activebackground="#2e8b57")
+        _hover(allow)                    # re-capture the new base color
+        allow.pack(side="left", padx=(6, 2), pady=4)
+        deny = _flat_button(self.ask_bar, "✕ Deny",
+                            lambda: self._resolve_ask(False))
+        deny.configure(bg=RED, activebackground="#7f1d2a")
+        _hover(deny)
+        deny.pack(side="left", padx=(0, 8), pady=4)
 
         row = tk.Frame(panel, bg=PANEL)
         row.pack(fill="x", padx=10, pady=(0, 8))
+        self.entry_row = row
         self.entry = tk.Entry(row, bg=PANEL2, fg=TEXT, insertbackground=TEXT,
                               relief="flat", bd=0, font=FONT)
         self.entry.pack(side="left", fill="x", expand=True, ipady=5, padx=(0, 6))
@@ -342,6 +376,12 @@ class Dock(tk.Tk):
         elif tag == "shh":
             self.log.insert("end", "◆  ", "who_shh")
             self.log.insert("end", text + "\n", "shh")
+        elif tag == "them":
+            self.log.insert("end", "them  ", "who_them")
+            self.log.insert("end", text + "\n", "them")
+        elif tag == "tool":
+            self.log.insert("end", "▸ ", "who_tool")
+            self.log.insert("end", text + "\n", "tool")
         else:
             self.log.insert("end", text + "\n", tag)
         self.log.see("end")
@@ -424,7 +464,7 @@ class Dock(tk.Tk):
         win = tk.Toplevel(self)
         win.title("ShhDock settings")
         win.configure(bg=PANEL)
-        win.geometry("520x480")
+        win.geometry("520x756")
         win.resizable(False, False)
         self.settings_win = win
         win.protocol("WM_DELETE_WINDOW", lambda: self._close_settings(win))
@@ -539,6 +579,62 @@ class Dock(tk.Tk):
                                    highlightthickness=0)
         self.mic_meter.pack(side="right")
 
+        # Agent
+        body = self._section(win, "Agent  ·  can operate this PC")
+        row = tk.Frame(body, bg=PANEL2)
+        row.pack(fill="x", padx=10)
+        self.agent_var = tk.StringVar(value=self.settings.get("agent", "ask"))
+        for label, mode in (("Off", "off"), ("Ask first", "ask"),
+                            ("Full auto", "auto")):
+            tk.Radiobutton(row, text=label, variable=self.agent_var,
+                           value=mode, bg=PANEL2, fg=TEXT, selectcolor=PANEL,
+                           activebackground=PANEL2, activeforeground=TEXT,
+                           font=FONT, cursor="hand2",
+                           command=self._agent_changed).pack(side="left",
+                                                             padx=(0, 14))
+        tk.Label(body, text="Tools: run commands, open apps, browse files, "
+                 "manage windows, type. \"Ask first\" shows a ✓/✕ prompt in "
+                 "the panel — destructive commands always ask. Every action "
+                 "is logged in actions.log.",
+                 bg=PANEL2, fg=MUTED, font=FONT_S, anchor="w", justify="left",
+                 wraplength=470).pack(fill="x", padx=10, pady=(2, 4))
+
+        # Call listening
+        body = self._section(win, "Call listening  ·  Discord / Zoom / game")
+        row = tk.Frame(body, bg=PANEL2)
+        row.pack(fill="x", padx=10)
+        self.call_var = tk.BooleanVar(value=bool(
+            self.settings.get("call_listen")))
+        tk.Checkbutton(row, text="Transcribe what plays on my speakers",
+                       variable=self.call_var, bg=PANEL2, fg=TEXT,
+                       selectcolor=PANEL, activebackground=PANEL2,
+                       activeforeground=TEXT, font=FONT, cursor="hand2",
+                       command=self._call_toggled).pack(side="left")
+        self.call_status = tk.Label(row, text="", bg=PANEL2, fg=MUTED,
+                                    font=FONT_S)
+        self.call_status.pack(side="right")
+        row2 = tk.Frame(body, bg=PANEL2)
+        row2.pack(fill="x", padx=10, pady=(4, 0))
+        tk.Label(row2, text="Device:", bg=PANEL2, fg=TEXT,
+                 font=FONT).pack(side="left")
+        self.call_device_var = tk.StringVar(value=self.settings.get(
+            "call_device", "default"))
+        try:
+            import callaudio as _ca
+            dev_names = _ca.enumerate_render_outputs()
+        except Exception:
+            dev_names = ["default"]
+        self.call_menu = tk.OptionMenu(row2, self.call_device_var,
+                                       *dev_names,
+                                       command=lambda _v:
+                                       self._call_device_changed())
+        self.call_menu.configure(bg=PANEL2, fg=TEXT, highlightthickness=0,
+                                 relief="flat", font=FONT, padx=4)
+        self.call_menu.pack(side="left", padx=(8, 0))
+        self.call_meter = tk.Canvas(row2, width=60, height=12, bg=PANEL2,
+                                    highlightthickness=0)
+        self.call_meter.pack(side="right")
+
         # Privacy
         body = self._section(win, "Privacy")
         row = tk.Frame(body, bg=PANEL2)
@@ -574,6 +670,121 @@ class Dock(tk.Tk):
             return []
 
     # -- settings actions -----------------------------------------------------
+
+    # -- agent & call listening -----------------------------------------------
+
+    def _agent_changed(self):
+        self.settings["agent"] = self.agent_var.get()
+        engine.save_settings(self.settings)
+
+    def _toggle_call(self):
+        on = not bool(self.settings.get("call_listen"))
+        self.settings["call_listen"] = on
+        engine.save_settings(self.settings)
+        if hasattr(self, "call_var"):
+            self.call_var.set(on)
+        if on:
+            self._start_call()
+        else:
+            self._stop_call()
+
+    def _call_toggled(self):
+        on = bool(self.call_var.get())
+        self.settings["call_listen"] = on
+        engine.save_settings(self.settings)
+        if on:
+            self._start_call()
+        else:
+            self._stop_call()
+
+    def _call_device_changed(self):
+        self.settings["call_device"] = self.call_device_var.get()
+        engine.save_settings(self.settings)
+        if self.settings.get("call_listen"):
+            self._stop_call()
+            self._start_call()
+
+    def _start_call(self):
+        self._set_handset(True)
+        try:
+            import callaudio
+            callaudio.start(self.events, self.settings)
+        except Exception as exc:
+            self._set_handset(False)
+            self._log("meta", "(call listening failed: %s)" % exc)
+
+    def _stop_call(self):
+        self._set_handset(False)
+        try:
+            import callaudio
+            callaudio.stop()
+        except Exception:
+            pass
+        if hasattr(self, "call_status"):
+            self.call_status.configure(text="off", fg=MUTED)
+
+    def _set_handset(self, on):
+        if getattr(self, "handset_btn", None) is not None:
+            try:
+                self.handset_btn.configure(fg=GREEN if on else TEXT)
+            except tk.TclError:
+                pass
+
+    def _on_call_state(self, ev):
+        state = ev.get("state")
+        msg = ev.get("msg", "")
+        if hasattr(self, "call_status"):
+            if state == "listening":
+                self.call_status.configure(text="listening", fg=GREEN)
+            elif state == "loading":
+                self.call_status.configure(text="starting…", fg=AMBER)
+            elif state == "error":
+                self.call_status.configure(text="error: " + msg[:40], fg=RED)
+            else:
+                self.call_status.configure(text="off", fg=MUTED)
+        if state == "listening":
+            self._set_handset(True)
+            self._log("meta", "(call listening on — %s)" %
+                      self.settings.get("call_device", "default"))
+        elif state == "error":
+            self._set_handset(False)
+            self._log("meta", "(call listening error: %s)" % msg)
+        elif state == "off":
+            self._set_handset(False)
+
+    # -- agent confirmation bar -----------------------------------------------
+
+    def _show_ask(self, ev):
+        if not self.panel_open:
+            self._toggle_panel()
+        self._ask_id = ev.get("id")
+        text = ev.get("summary", "")
+        if ev.get("danger"):
+            text = "⚠ destructive? " + text
+        self.ask_label.configure(text=text[:120])
+        try:
+            self.ask_bar.pack(fill="x", padx=10, pady=(0, 6),
+                              before=self.entry_row)
+        except tk.TclError:
+            self.ask_bar.pack(fill="x", padx=10, pady=(0, 6))
+        self._log("meta", "(needs approval: %s)" % text[:80])
+        self._set_status("needs approval…", AMBER)
+
+    def _resolve_ask(self, approved):
+        ask_id = self._ask_id
+        self._ask_id = None
+        try:
+            self.ask_bar.pack_forget()
+        except tk.TclError:
+            pass
+        try:
+            import agent
+            agent.resolve_ask(ask_id, approved)
+        except Exception:
+            pass
+        self._log("meta", "(approved)" if approved else "(denied)")
+        self.dot.configure(fg=GREEN)
+        self._set_status("listening", GREEN)
 
     def _sync_ram_widgets(self):
         mode = self.ram_var.get()
@@ -902,6 +1113,8 @@ class Dock(tk.Tk):
             self.assistant.start()
         except Exception as exc:
             self._set_status("mic failed: %s" % exc, RED)
+        if self.settings.get("call_listen"):
+            self._start_call()
 
     def _drain(self):
         try:
@@ -921,6 +1134,17 @@ class Dock(tk.Tk):
             self._draw_meter(ev["level"])
             if hasattr(self, "mic_meter"):
                 self._draw_mic_bar(ev["level"])
+        elif t == "call_level":
+            if hasattr(self, "call_meter"):
+                self._draw_mic_bar(ev["level"], canvas=self.call_meter)
+        elif t == "call_state":
+            self._on_call_state(ev)
+        elif t == "call_text":
+            self._log("them", ev["text"])
+        elif t == "tool":
+            self._log("tool", ev.get("text", ""))
+        elif t == "ask":
+            self._show_ask(ev)
         elif t == "partial":
             self._set_status("hearing: " + ev["text"][:70], MUTED)
         elif t == "speech_start":
@@ -1026,8 +1250,8 @@ class Dock(tk.Tk):
                 color = "#232833"
             c.create_rectangle(x0, 3, x0 + seg, h - 3, fill=color, width=0)
 
-    def _draw_mic_bar(self, level):
-        c = self.mic_meter
+    def _draw_mic_bar(self, level, canvas=None):
+        c = canvas if canvas is not None else self.mic_meter
         c.delete("all")
         w, h = 60, 12
         seg, gap = 3, 2
@@ -1044,6 +1268,11 @@ class Dock(tk.Tk):
         self.status.configure(text=text, fg=color)
 
     def _quit(self):
+        try:
+            import callaudio
+            callaudio.stop()
+        except Exception:
+            pass
         try:
             if self.assistant:
                 self.assistant.stop()

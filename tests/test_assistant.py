@@ -66,7 +66,7 @@ def main():
     print("answer: %s" % answer)
     assert answer and "paris" in answer.lower(), answer
 
-    # statement -> correctly ignored
+    # typed text is always answered — the user chose those words
     asst.submit_text("I really like pizza with extra cheese")
     heard = None
     deadline = time.time() + 10
@@ -78,8 +78,28 @@ def main():
             continue
         if ev.get("t") == "heard":
             heard = ev
-    assert heard and heard.get("answered") is False, heard
-    print("statement ignored as expected")
+    assert heard and heard.get("answered") is True, heard
+    print("typed statement answered as expected")
+
+    # a mic-sourced statement (not a question) is still gated out when
+    # answer_mode is "questions" (this machine may run in "everything")
+    saved_mode = settings.get("answer_mode", "questions")
+    settings["answer_mode"] = "questions"
+    asst.handle_utterance("I really like pizza with extra cheese",
+                          source="mic")
+    heard2 = None
+    deadline = time.time() + 10
+    while time.time() < deadline and heard2 is None:
+        try:
+            ev = events.get_nowait()
+        except queue.Empty:
+            time.sleep(0.05)
+            continue
+        if ev.get("t") == "heard":
+            heard2 = ev
+    settings["answer_mode"] = saved_mode
+    assert heard2 and heard2.get("answered") is False, heard2
+    print("mic statement ignored as expected")
 
     asst.stop()
     server.stop()

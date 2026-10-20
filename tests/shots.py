@@ -171,17 +171,25 @@ def main():
         dockui.set_hidden_from_capture(app.winfo_id(), False)
         grab_box(tk_box(app), "panel-empty.png")
 
-        # 2) a realistic conversation
+        # 2) a realistic conversation, now including what a callmate said
+        #    and an agent tool action
         convo = [("you", "what time is it?"),
                  ("shh", "It's about 3 pm on your clock."),
+                 ("them", "push A — I have ult in 10"),
+                 ("tool", "run: Get-Volume"),
+                 ("tool", "run: Get-Volume -> master volume: 100%"),
                  ("you", "how long have I been in this match?"),
                  ("shh", "Roughly 40 minutes — you dropped in around 2:20.")]
         for tag, text in convo:
             events.put({"t": "stt", "state": "listening"})
             if tag == "you":
                 events.put({"t": "speech_end", "text": text})
-            else:
+            elif tag == "shh":
                 events.put({"t": "answer", "text": text})
+            elif tag == "them":
+                events.put({"t": "call_text", "text": text})
+            else:
+                events.put({"t": "tool", "phase": "result", "text": text})
             for _ in range(3):
                 app.update()
                 time.sleep(0.05)
@@ -190,6 +198,20 @@ def main():
             app.update()
             time.sleep(0.04)
         grab_box(tk_box(app), "dock-panel.png")
+
+        # 2b) agent confirmation bar (a pending tool that needs a yes/no)
+        import agent as agent_mod
+        ask_id = agent_mod.new_ask("run: Get-Volume", "run",
+                                   {"cmd": "Get-Volume"})
+        events.put({"t": "tool", "phase": "start", "text": "run: Get-Volume"})
+        events.put({"t": "ask", "id": ask_id, "summary": "run: Get-Volume",
+                    "danger": False})
+        for _ in range(6):
+            app.update()
+            time.sleep(0.05)
+        grab_box(tk_box(app), "dock-agent.png")
+        app._resolve_ask(False)             # hide the bar again
+        app.update()
 
         # 3) bubble (panel closed, answer under the dock)
         app._toggle_panel()
@@ -213,7 +235,10 @@ def main():
         app._close_bubble()
         app.update()
 
-        # 4) settings, on a clean card
+        # 4) settings, on a clean card (call section shown live & consistent)
+        settings["call_listen"] = True       # shot-only: box + status agree
+        events.put({"t": "call_state", "state": "listening"})
+        events.put({"t": "call_level", "level": 0.6})
         app._open_settings()
         for _ in range(8):
             app.update()
@@ -225,6 +250,7 @@ def main():
             time.sleep(0.04)
         solo_card(swin, app, "settings.png")
         app._close_settings(swin)
+        settings["call_listen"] = False     # restore (shot was fake)
         app.update()
 
         # 5) setup wizard, on a clean card

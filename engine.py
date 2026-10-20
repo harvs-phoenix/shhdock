@@ -35,7 +35,7 @@ LLAMA_DL = "https://github.com/ggml-org/llama.cpp/releases/download"
 LLAMA_NIGHTLY_TXT = ("https://github.com/ggml-org/llama.cpp/releases/"
                      "latest/download/nightly-tag.txt")
 
-USER_AGENT = "ShhDock/1.0 (+local voice assistant)"
+USER_AGENT = "ShhDock/1.1 (+local voice assistant with agent tools)"
 CHAT_PORT = 8654
 
 # --- model catalog -----------------------------------------------------------
@@ -127,6 +127,9 @@ DEFAULTS = {
     "hide_from_share": True,
     "gpu": False,
     "mic_device": "default",
+    "agent": "ask",              # off | ask | auto  (computer control)
+    "call_listen": False,        # transcribe Discord/Zoom/game audio
+    "call_device": "default",    # output endpoint for loopback capture
 }
 
 
@@ -400,7 +403,7 @@ class LlamaServer:
         self.proc = None
         self.ready = False
 
-    def chat(self, messages, timeout=180):
+    def chat(self, messages, timeout=180, max_tokens=240):
         """Blocking OpenAI-style chat call (run it on a worker thread)."""
         if not self.ready:
             return None, "model is still warming up, try again in a second"
@@ -408,7 +411,7 @@ class LlamaServer:
             "model": "local",
             "messages": messages,
             "temperature": 0.7,
-            "max_tokens": 240,
+            "max_tokens": max_tokens,
             "stream": False,
         }).encode("utf-8")
         req = urllib.request.Request(

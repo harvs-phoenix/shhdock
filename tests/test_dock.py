@@ -17,6 +17,7 @@ SHOT = Path(__file__).parent / "dock_open.png"
 
 def main():
     settings = engine.load_settings()
+    settings["hide_from_share"] = True     # this test asserts on the hiding
     events = queue.Queue()
     server = engine.LlamaServer(events.put)
     # keep this test hermetic: no real mic, no real server
@@ -91,6 +92,37 @@ def main():
     app.update()
     app._close_bubble()
 
+    # 5b) agent + call UI surface: 'them'/'tool' lines land in the log
+    for ev in ({"t": "call_level", "level": 0.7},
+               {"t": "call_text", "text": "yeah I will push mid in a second"},
+               {"t": "tool", "phase": "start", "text": "run: Get-Volume"},
+               {"t": "tool", "phase": "result",
+                "text": "run: Get-Volume -> master volume: 100%"}):
+        events.put(ev)
+    for _ in range(6):
+        app.update()
+        time.sleep(0.05)
+    log_text2 = app.log.get("1.0", "end")
+    assert "push mid" in log_text2, log_text2
+    assert "Get-Volume" in log_text2, log_text2
+    print("call + tool lines in log ok")
+
+    # 5c) confirmation bar: 'ask' shows it, clicking Allow resolves + hides
+    import agent as agent_mod
+    ask_id = agent_mod.new_ask("run: echo hi", "run", {"cmd": "echo hi"})
+    events.put({"t": "ask", "id": ask_id, "summary": "run: echo hi",
+                "danger": False})
+    for _ in range(6):
+        app.update()
+        time.sleep(0.05)
+    assert app._ask_id == ask_id
+    assert app.ask_bar.winfo_manager() == "pack", "confirm bar not shown"
+    app._resolve_ask(True)
+    app.update()
+    assert app.ask_bar.winfo_manager() == "", "confirm bar still shown"
+    assert agent_mod.wait_ask(ask_id, timeout=2) is True
+    print("ask bar + resolve ok")
+
     dockui.set_hidden_from_capture(app.winfo_id(), False)
     time.sleep(0.2)
     app.update()
@@ -123,6 +155,17 @@ def main():
     img2.save(shot2)
     print("settings screenshot: %s (%dx%d)" % (shot2, img2.width,
                                                img2.height))
+
+    # settings carries the agent + call controls
+    assert hasattr(app, "agent_var") and hasattr(app, "call_var")
+    assert hasattr(app, "call_menu") and hasattr(app, "call_status")
+    app.agent_var.set("off")
+    app._agent_changed()
+    assert app.settings.get("agent") == "off"
+    app.agent_var.set("ask")
+    app._agent_changed()
+    assert app.settings.get("agent") == "ask"
+    print("agent + call settings controls ok")
 
     app._quit()
     print("dock test OK")

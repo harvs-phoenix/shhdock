@@ -38,7 +38,10 @@ tests\ contains the full suite (run in order):
     py tests\test_llm.py         llama.cpp server + real chat completion
     py tests\test_stt.py         vosk transcribes a known wav (no mic needed)
     py tests\test_assistant.py   full stack: real mic + real model + answers
-    py tests\test_dock.py        dock UI, capture-hiding verification
+    py tests\test_agent.py       agent tools, gates, ask registry, volume COM
+    py tests\test_agent_llm.py   agent loop: scripted flows + the real model
+    py tests\test_callaudio.py   WASAPI loopback capture + call VAD
+    py tests\test_dock.py        dock UI, capture-hiding, ask bar, settings
     py tests\test_exe.py         launches the built exe and closes it
     py tests\shots.py            regenerates all README screenshots
 
@@ -48,6 +51,48 @@ Settings has an experimental "Use GPU" toggle. It downloads the CUDA 13.4
 build of llama.cpp (plus the CUDA runtime zip) and starts the server with
 -ngl 99. Leave it off while gaming — a CPU model doesn't fight your GPU
 for VRAM, and a 3B Q4 model is already fast on a modern 8-core.
+
+Agent (computer control) notes
+------------------------------
+- Protocol: the model replies with one JSON line {"tool":NAME,"args":{...}}
+  or plain text (the final answer). No --jinja or native tool-calling
+  needed, so it works on every Qwen2.5 tier; the 1.5B+ tiers handle it
+  reliably, the 0.5B sometimes freelances.
+- Safety: read-only tools never prompt; side-effecting tools (run, open,
+  send_keys, window_hide/show, volume set) prompt in "ask" mode. DANGER_RE
+  (Remove-Item, shutdown, rm -rf, diskpart, ...) forces a prompt even in
+  full-auto. Every action is appended to %LOCALAPPDATA%\ShhDock\actions.log.
+- Confirmation runs on a threading.Event in agent.new_ask/wait_ask; the UI
+  thread calls resolve_ask(). wait_ask times out to "declined" after 120 s.
+- Raw COM gotchas baked into agent.py/callaudio.py (all discovered the hard
+  way):
+  * COM vtables need a DOUBLE dereference: interface ptr -> vtable ptr ->
+    function table. One deref reads the vtable pointer as functions.
+  * IMMDeviceEnumerator CLSID {BCDE0395-...} and IID {A95664D2-...} are
+    DIFFERENT GUIDs; CoCreateInstance needs both.
+  * IAudioEndpointVolume IID is {5CDF2C82-841E-4546-9722-0CF74078229A},
+    and its vtable is 3=RegisterControlChangeNotify ... 7=SetMasterVol-
+    tageLevelScalar, 9=GetMasterVolumeLevelScalar (NOT 12/13/14).
+  * IMMDevice::Activate takes FOUR args after this (iid, clsCtx,
+    pActivationParams=NULL, ppInterface).
+  * SendInput's INPUT struct is 40 bytes on Win64 — the union must be
+    padded to MOUSEINPUT's size (32), not KEYBDINPUT's (24).
+  * ctypes.wintypes has no GUID class in Python 3.14; define the struct.
+
+WASAPI loopback (call listening) notes
+--------------------------------------
+- AUDCLNT_STREAMFLAGS_LOOPBACK is 0x00020000. 0x00010000 is CROSSPROCESS
+  and makes Initialize() fail with E_INVALIDARG (0x80070057) on every
+  endpoint — the exact symptom that cost an afternoon.
+- sounddevice/PortAudio does NOT expose loopback here (no WasapiSettings
+  flag, no loopback devices enumerated) — hence raw COM in callaudio.py.
+- Shared mode: Initialize(SHARED, LOOPBACK, 0, 0, mixFormat, NULL), then
+  GetService(IAudioCaptureClient {C8ADBD64-E71E-48A0-A4DE-185C395CD317}).
+- The mix format is WAVE_FORMAT_EXTENSIBLE float32; the SubFormat GUID
+  starts at offset 24 (Format 18 + Samples 2 + dwChannelMask 4), and its
+  first DWORD is the real tag (3 = IEEE_FLOAT).
+- Loopback only delivers packets while the render engine mixes; when audio
+  stops entirely the listener force-closes any open utterance after 1.5 s.
 
 Capture-hiding details
 ----------------------
