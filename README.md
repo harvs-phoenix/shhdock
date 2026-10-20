@@ -21,7 +21,7 @@
 
 ShhDock is a slim bar docked at the top of your screen. While you game and stream, it does several things at once:
 
-- **Vanishes from capture.** It sets `WDA_EXCLUDEFROMCAPTURE` on its own window, so Discord, OBS, and the Xbox Game Bar won't render it. Your viewers never see it. **You do.**
+- **Vanishes from capture.** It sets `WDA_EXCLUDEFROMCAPTURE` on its own windows — the bar *and* every answer bubble, panel and dialog — so Discord, OBS, and the Xbox Game Bar won't render them. Your viewers never see it. **You do.**
 - **Always listens.** A voice-activity detector watches your mic and transcribes speech locally with Vosk. No audio ever leaves your machine.
 - **Answers fast.** When you ask a question, a local **llama.cpp** model replies in a text bubble under the dock — typically in 1–3 seconds, entirely offline.
 - **Actually does things.** Ask it to check your RAM, find a file, open an app, run a command, or type text — the model uses real tools, and every side-effecting action pops a **✓ Allow / ✕ Deny** card in the panel (or runs unattended if you opt in).
@@ -98,6 +98,8 @@ You can override it anytime — **Auto**, a **preset**, or a **custom** RAM numb
 - **The mic is visible.** The dock shows a live level meter and a status word (`listening`, `thinking…`) whenever it's capturing. There's no silent mode.
 - **Call listening is opt-in and visible.** The 📞 indicator is green only while it's transcribing, the toggle is one click away, and the transcript never leaves your PC.
 - **The agent asks before it acts.** In the default mode nothing runs without your click; the full action log lives in `actions.log`.
+- **Every window is capture-hidden, not just the bar.** The answer bubble, the panel, tooltips, settings and setup all carry `WDA_EXCLUDEFROMCAPTURE` (verified by reading it back, re-applied on every privacy toggle) — so Discord, OBS, Game Bar, Snipping Tool and screenshots can't see *any* of it. The windows also have no taskbar or Alt-Tab entry and blank/bland titles, so window pickers list nothing recognizable.
+- **What it can't do: hide from Task Manager.** Windows has no supported way to remove a process from Task Manager / Process Explorer — the only techniques that "work" inject code into those apps, and Defender rightly flags that. ShhDock never does that. If you want the row gone from your own view, rename `ShhDock.exe` to anything (nothing depends on the filename) — that's as far as it can honestly go.
 - **The browser link is local-only.** The Chrome extension talks to `127.0.0.1` and nothing else; uninstall it from `chrome://extensions` whenever you like.
 - **Everything is local.** Speech recognition, the chat model, and every tool run on your machine. No account, no telemetry, no server.
 - **It only hears while it's running.** Close the dock and the microphone and call streams stop.

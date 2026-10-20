@@ -142,3 +142,21 @@ ShhDock therefore:
 This is also why screenshots of the dock need the affinity lifted first —
 ImageGrab uses the same capture path Discord does, which is exactly the
 point.
+
+v1.2.1 extended this to EVERY window, because SetWindowDisplayAffinity is
+per top-level window: the answer bubble, hover tooltips, the settings
+window and the setup wizard are separate Tk toplevels and were showing up
+in captures while the bar itself was hidden. Dock._secure_window() gives
+each of them the same set + read-back + retry dance (150 ms apart, up to
+40 tries while the window maps) and registers them so the privacy toggle
+re-applies everything (_secure_all_windows). Findings worth keeping:
+
+- PrintWindow is blocked by WDA too (the settings/setup README shots came
+  out black until the affinity was lifted around the grab) — so Discord's
+  PrintWindow-based window capture can't see these windows either.
+- All windows are WS_EX_TOOLWINDOW (no taskbar, no Alt-Tab) and carry
+  blank/bland titles, so window pickers list nothing recognizable. This
+  broke test_exe's title-based lookup, which now finds the window by PID.
+- Hiding from Task Manager/Process Explorer is NOT possible without
+  process injection (which Defender flags); that limit is stated openly
+  in the README instead of pretending otherwise.

@@ -136,7 +136,7 @@ class Dock(tk.Tk):
         self._ask_id = None            # pending agent confirmation
 
         self.withdraw()
-        self.title("ShhDock")
+        self.title("")                # blank: window listers show no name
         self.overrideredirect(True)
         self.configure(bg=BG)
         self._build_pill()
@@ -144,6 +144,7 @@ class Dock(tk.Tk):
         self.deiconify()
         self.topmost(True)
         self.after(300, self._apply_capture_affinity)
+        self._capture_windows = [self]      # every window we must keep hidden
 
         self.after(50, self._drain)
         self.after(200, self._boot)
@@ -170,6 +171,31 @@ class Dock(tk.Tk):
         if get_display_affinity(self.winfo_id()) == 0x11 or attempt >= 40:
             return
         self.after(150, lambda: self._apply_capture_affinity(attempt + 1))
+
+    def _secure_window(self, win, attempt=0):
+        """Every ShhDock toplevel gets the bar's treatment: capture-hidden
+        (verified by reading the affinity back, retried while the window
+        maps) and registered so the privacy toggle can re-apply it."""
+        try:
+            if not win.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        if win not in self._capture_windows:
+            self._capture_windows.append(win)
+        if not self.settings.get("hide_from_share", True):
+            set_hidden_from_capture(win.winfo_id(), False)
+            return
+        set_hidden_from_capture(win.winfo_id(), True)
+        if get_display_affinity(win.winfo_id()) == 0x11 or attempt >= 40:
+            return
+        self.after(150, lambda: self._secure_window(win, attempt + 1))
+
+    def _secure_all_windows(self):
+        """Re-apply capture-hiding across every known window (privacy toggle
+        can flip while the settings window itself is open)."""
+        for win in list(self._capture_windows):
+            self._secure_window(win)
 
     def _build_pill(self):
         root = tk.Frame(self, bg=BG, highlightthickness=1,
@@ -237,6 +263,8 @@ class Dock(tk.Tk):
             x = widget.winfo_rootx() - 20
             y = widget.winfo_rooty() + widget.winfo_height() + 4
             tip.geometry("+%d+%d" % (x, y))
+            tip.title("")
+            self.after(120, lambda: self._secure_window(tip))
 
         def hide(_e=None):
             nonlocal tip
@@ -436,6 +464,8 @@ class Dock(tk.Tk):
         x = self.winfo_rootx() + (self.winfo_width() - b.winfo_reqwidth()) // 2
         y = self.winfo_rooty() + self.winfo_height() + 6
         b.geometry("+%d+%d" % (max(4, x), y))
+        b.title("")
+        self.after(120, lambda: self._secure_window(b))   # answers are hidden
         b.bind("<Button-1>", lambda _e: self._close_bubble())
         lbl.bind("<Button-1>", lambda _e: self._close_bubble())
         self.bubble = b
@@ -462,13 +492,15 @@ class Dock(tk.Tk):
             except Exception:
                 self.settings_win = None
         win = tk.Toplevel(self)
-        win.title("ShhDock settings")
+        win.title("Settings")           # bland: nothing recognizable listed
+        win.attributes("-toolwindow", True)   # no taskbar / Alt-Tab entry
         win.configure(bg=PANEL)
         win.geometry("520x872")
         win.resizable(False, False)
         self.settings_win = win
         win.protocol("WM_DELETE_WINDOW", lambda: self._close_settings(win))
         self._build_settings(win)
+        self.after(200, lambda: self._secure_window(win))
 
     def _close_settings(self, win):
         self.dl_sink = None
@@ -942,6 +974,7 @@ class Dock(tk.Tk):
         engine.save_settings(self.settings)
         set_hidden_from_capture(self.winfo_id(),
                                 self.settings["hide_from_share"])
+        self._secure_all_windows()      # bubble / settings / setup too
 
     def _open_data(self):
         subprocess.Popen(["explorer", str(engine.DATA_DIR)])
@@ -974,13 +1007,15 @@ class Dock(tk.Tk):
             except Exception:
                 self.setup_win = None
         win = tk.Toplevel(self)
-        win.title("ShhDock setup")
+        win.title("Setup")
+        win.attributes("-toolwindow", True)   # no taskbar / Alt-Tab entry
         win.configure(bg=PANEL)
         win.geometry("500x440")
         win.resizable(False, False)
         win.protocol("WM_DELETE_WINDOW", lambda: self._close_setup(win))
         self.setup_win = win
         self._build_setup(win)
+        self.after(200, lambda: self._secure_window(win))
 
     def _close_setup(self, win):
         self.dl_sink = None

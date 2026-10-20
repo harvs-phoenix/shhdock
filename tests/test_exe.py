@@ -13,13 +13,15 @@ EnumProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p,
                               ctypes.c_void_p)
 
 
-def find_window(title):
+def find_window(pid):
+    """The visible top-level window belonging to our process (the dock's
+    title is blank now — find it by PID, like any other lister would)."""
     found = []
 
     def cb(hwnd, _lparam):
-        buf = ctypes.create_unicode_buffer(256)
-        user32.GetWindowTextW(hwnd, buf, 256)
-        if buf.value == title:
+        wpid = ctypes.c_ulong(0)
+        if user32.GetWindowThreadProcessId(hwnd, ctypes.byref(wpid)) and \
+                wpid.value == pid and user32.IsWindowVisible(hwnd):
             found.append(hwnd)
         return True
     user32.EnumWindows(EnumProc(cb), 0)
@@ -34,7 +36,7 @@ def main():
     hwnd = None
     for _ in range(80):           # up to 16 s (onefile unpack + boot)
         time.sleep(0.2)
-        hwnd = find_window("ShhDock")
+        hwnd = find_window(proc.pid)
         if hwnd:
             break
     if not hwnd:

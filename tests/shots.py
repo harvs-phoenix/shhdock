@@ -102,9 +102,13 @@ def card_composite(dock_box, bubble_box, name):
 
 def solo_card(window, app, name, pad=14):
     """Capture one dialog via PrintWindow onto a clean card — no neighbours,
-    no overlap, no desktop bleed."""
+    no overlap, no desktop bleed. The dialogs are capture-hidden (that's the
+    point), and PrintWindow honours that, so lift the affinity for the
+    instant of the grab and put it straight back."""
     dockui.set_hidden_from_capture(app.winfo_id(), True)   # keep dock hidden
     hwnd = tk_hwnd(window)
+    dockui.set_hidden_from_capture(hwnd, False)            # lift the dialog
+    time.sleep(0.15)
     img = None
     for _ in range(6):                     # a couple of tries to realize it
         window.update_idletasks()
@@ -113,6 +117,7 @@ def solo_card(window, app, name, pad=14):
         if img is not None:
             break
         time.sleep(0.08)
+    dockui.set_hidden_from_capture(hwnd, True)             # hide it again
     if img is None:
         raise RuntimeError("PrintWindow failed for %s" % name)
     w, h = img.width + pad * 2, img.height + pad * 2
@@ -229,9 +234,14 @@ def main():
             app.bubble.update_idletasks()
             app.update()
             time.sleep(0.04)
+        # the answer bubble is capture-hidden like the bar — lift it for
+        # the shot, then put the hiding straight back
+        dockui.set_hidden_from_capture(app.bubble.winfo_id(), False)
+        time.sleep(0.15)
         dock_box = tk_box(app)
         bub_box = tk_box(app.bubble)
         card_composite(dock_box, bub_box, "dock-bubble.png")
+        dockui.set_hidden_from_capture(app.bubble.winfo_id(), True)
         app._close_bubble()
         app.update()
 

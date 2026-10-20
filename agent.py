@@ -333,7 +333,11 @@ def platform_version_build():
 
 
 def tool_processes(args):
-    return "\n".join(_top_processes_full(12)) or "(no data)"
+    try:
+        limit = max(1, min(60, int((args or {}).get("limit", 12))))
+    except (TypeError, ValueError):
+        limit = 12
+    return "\n".join(_top_processes_full(limit)) or "(no data)"
 
 
 def _top_processes_full(limit=12):

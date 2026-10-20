@@ -86,6 +86,20 @@ def main():
     app.bubble.update_idletasks()
     print("bubble geometry: %s" % app.bubble.geometry())
 
+    # the answer bubble must be capture-hidden too (answers can't be seen
+    # in a stream/screenshot), and like the bar it carries no window title
+    for _ in range(10):
+        app.update()
+        time.sleep(0.05)
+        if dockui.get_display_affinity(app.bubble.winfo_id()) == 0x11:
+            break
+    bub_aff = dockui.get_display_affinity(app.bubble.winfo_id())
+    print("WDA of answer bubble: 0x%x" % (bub_aff or 0))
+    assert bub_aff == 0x11, "answer bubble is NOT hidden from capture!"
+    assert app.title() == "", "dock window has a recognizable title"
+    assert app.bubble.title() == "", "answer bubble has a window title"
+    print("bubble hidden + titles blank ok")
+
     # screenshot with panel open (re-open for the shot).  WDA hides the dock
     # from ALL capture APIs including ImageGrab, so lift it for the shot.
     app._toggle_panel()
@@ -146,6 +160,24 @@ def main():
     app.update()
     swin = app.settings_win
     assert swin is not None
+    # settings is capture-hidden, off the taskbar/Alt-Tab, bland title
+    for _ in range(10):
+        swin.update_idletasks()
+        app.update()
+        time.sleep(0.05)
+        if dockui.get_display_affinity(swin.winfo_id()) == 0x11:
+            break
+    aff = dockui.get_display_affinity(swin.winfo_id())
+    print("WDA of settings window: 0x%x" % (aff or 0))
+    assert aff == 0x11, "settings window is NOT hidden from capture"
+    assert swin.title() == "Settings"
+    assert bool(swin.attributes("-toolwindow")), \
+        "settings window would show in Alt-Tab/taskbar"
+    print("settings hidden + toolwindow ok")
+
+    # lift the affinity just for the shot (WDA would hide it from ImageGrab)
+    dockui.set_hidden_from_capture(swin.winfo_id(), False)
+    time.sleep(0.2)
     from PIL import ImageGrab as IG2
     swin.update_idletasks()
     sx, sy = swin.winfo_rootx(), swin.winfo_rooty()
@@ -155,6 +187,10 @@ def main():
     img2.save(shot2)
     print("settings screenshot: %s (%dx%d)" % (shot2, img2.width,
                                                img2.height))
+    # re-hide and verify it stuck
+    dockui.set_hidden_from_capture(swin.winfo_id(), True)
+    time.sleep(0.15)
+    assert dockui.get_display_affinity(swin.winfo_id()) == 0x11
 
     # settings carries the agent + call controls
     assert hasattr(app, "agent_var") and hasattr(app, "call_var")

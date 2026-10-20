@@ -61,10 +61,11 @@ check("system_info has CPU", "CPU" in info)
 snap = agent.system_snapshot()
 check("snapshot mentions OS build", "Windows build" in snap)
 
-procs = agent.tool_processes({})
+procs = agent.tool_processes({"limit": 50})   # top rows vary by machine load
 check("processes lists something", len(procs) > 20)
 check("processes shows a known exe", "python" in procs.lower()
-      or "chrome" in procs.lower() or "explorer" in procs.lower())
+      or "chrome" in procs.lower() or "explorer" in procs.lower()
+      or "shhdock" in procs.lower())
 
 ld = agent.tool_list_dir({"path": str(Path(__file__).parent)})
 check("list_dir shows this test file", "test_agent.py" in ld)
