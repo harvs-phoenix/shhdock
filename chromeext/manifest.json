@@ -1,0 +1,9 @@
+{
+  "manifest_version": 3,
+  "name": "ShhDock Browser Link",
+  "version": "1.2.0",
+  "description": "Lets the local ShhDock assistant read and control Chrome on this PC. Commands stay on 127.0.0.1.",
+  "permissions": ["tabs", "scripting", "alarms", "activeTab"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "background": {"service_worker": "background.js"}
+}

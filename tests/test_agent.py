@@ -82,6 +82,63 @@ check("search finds own file", "test_agent.py" in sf)
 wl = agent.tool_window_list({})
 check("window_list non-empty", len(wl) > 20)
 
+# --- screen reading, mouse, chrome ------------------------------------------
+scr = agent.tool_screen_text({})
+print("   screen:", scr[:90], "...")
+check("screen_text has FOCUSED", scr.startswith("FOCUSED:"))
+check("screen_text includes a process", "[.exe]" in scr or "[?]" in scr
+      or "[python" in scr.lower() or "] hwnd=" in scr)
+check("screen_text capped", len(scr) <= agent.RESULT_CAP)
+
+mv = agent.tool_mouse_move({"dx": 0, "dy": 0})          # no-op nudge
+check("mouse_move answers", mv.startswith("cursor at"), mv)
+sc = agent.tool_mouse_scroll({"dy": 0})                 # zero-click wheel
+check("mouse_scroll answers", sc.startswith("scrolled"), sc)
+ck = agent.tool_mouse_click({"button": "trackball"})
+check("mouse_click bad button handled", "unknown button" in ck)
+ck2 = agent.execute_tool("mouse_move", {"dx": 0, "dy": 0})
+check("execute_tool wraps mouse_move", ck2.startswith("cursor at"), ck2)
+
+check("chrome registered", "chrome" in agent.TOOLS)
+check("chrome unknown op handled",
+      "unknown chrome action" in agent.tool_chrome({"action": "dance"}))
+br = agent.tool_chrome({"action": "extract"})
+print("   chrome:", br[:80].replace("\n", " "))
+check("chrome extract works fast",
+      "PAGE" in br or "not connected" in br or "failed" in br, br[:70])
+
+# --- safety gates for the new tools ---
+check("gate screen_text allows", agent.gate("screen_text", {}, "ask") == "allow")
+check("gate mouse_move allows", agent.gate("mouse_move", {"x": 1}, "ask") == "allow")
+check("gate mouse_scroll allows", agent.gate("mouse_scroll", {"dy": -1}, "ask") == "allow")
+check("gate mouse_click asks", agent.gate("mouse_click", {"x": 1}, "ask") == "confirm")
+check("gate mouse_click auto allows",
+      agent.gate("mouse_click", {"x": 1}, "auto") == "allow")
+check("gate chrome extract allows",
+      agent.gate("chrome", {"action": "extract"}, "ask") == "allow")
+check("gate chrome click asks",
+      agent.gate("chrome", {"action": "click", "text": "x"}, "ask") == "confirm")
+check("gate chrome search auto allows",
+      agent.gate("chrome", {"action": "search", "query": "x"}, "auto") == "allow")
+check("gate chrome blocked when off",
+      agent.gate("chrome", {"action": "extract"}, "off") == "block")
+
+# --- summaries + protocol mention the new tools ---
+check("summary chrome", agent.summary_for("chrome", {"action": "search",
+      "query": "price"}) == "chrome search price")
+check("summary mouse_click", "click" in agent.summary_for(
+    "mouse_click", {"x": 4, "y": 5}))
+for name in ("screen_text", "mouse_move", "mouse_click", "mouse_scroll",
+             "chrome"):
+    check("protocol lists %s" % name, name in agent.AGENT_PROTOCOL)
+
+# --- parser accepts the new tool json ---
+t = agent.parse_tool('{"tool":"mouse_click","args":{"x":600,"y":300}}')
+check("parse mouse_click json", t and t["tool"] == "mouse_click")
+t = agent.parse_tool('{"tool":"chrome","args":{"action":"search",'
+                     '"query":"rtx 5060 ti"}}')
+check("parse chrome json", t and t["args"]["query"] == "rtx 5060 ti")
+
 # --- confirm registry ---
 aid = agent.new_ask("run: echo hi", "run", {"cmd": "echo hi"})
 check("ask registered", agent.pending_ask_count() == 1)

@@ -21,12 +21,18 @@ Everything lands in %LOCALAPPDATA%\ShhDock.
 Build the exe
 -------------
     py -m PyInstaller --onefile --noconsole --icon shhdock.ico ^
-        --name ShhDock --collect-all vosk --collect-all sounddevice shhdock.py
+        --name ShhDock --collect-all vosk --collect-all sounddevice ^
+        --add-data "chromeext;chromeext" shhdock.py
 
 Output: dist\ShhDock.exe (or build_out\ShhDock.exe if you pass --distpath).
 
 --collect-all vosk is required: vosk is imported lazily inside the mic
 thread, so PyInstaller cannot detect it statically. Same for sounddevice.
+
+--add-data "chromeext;chromeext" ships the Chrome extension inside the exe;
+browserlink.extension_dir() copies it to %LOCALAPPDATA%\ShhDock\chromeext on
+every run (a frozen onefile temp dir vanishes, but Chrome must keep reading
+the files it loaded unpacked).
 
 Tests
 -----
@@ -40,6 +46,7 @@ tests\ contains the full suite (run in order):
     py tests\test_assistant.py   full stack: real mic + real model + answers
     py tests\test_agent.py       agent tools, gates, ask registry, volume COM
     py tests\test_agent_llm.py   agent loop: scripted flows + the real model
+    py tests\test_browserlink.py localhost bridge: fake extension round trip
     py tests\test_callaudio.py   WASAPI loopback capture + call VAD
     py tests\test_dock.py        dock UI, capture-hiding, ask bar, settings
     py tests\test_exe.py         launches the built exe and closes it
@@ -93,6 +100,30 @@ WASAPI loopback (call listening) notes
   first DWORD is the real tag (3 = IEEE_FLOAT).
 - Loopback only delivers packets while the render engine mixes; when audio
   stops entirely the listener force-closes any open utterance after 1.5 s.
+
+Browser link (Chrome extension) notes
+-------------------------------------
+- Shape: ShhDock runs ThreadingHTTPServer on 127.0.0.1:8765. The extension
+  long-polls GET /poll (blocks up to 4 s), executes the command inside the
+  active tab with chrome.scripting, then POSTs /report {id, ok, out}.
+  browserlink.send() parks the result on a threading.Event keyed by id.
+- Security: every request must have a 127.0.0.1/localhost Host and an
+  Origin that is absent, "null", chrome-extension:// or 127.0.0.1 — a random
+  web page cannot drive the bridge. Bind is loopback-only.
+- connected() is "the extension polled within the last 10 s". chrome open/
+  search fall back to the default browser when it's offline; other actions
+  fail fast (after a 3 s grace) instead of hanging for the send timeout.
+- MV3 service workers get killed when idle: background.js re-enters the poll
+  loop from a chrome.alarms 0.5-min keep-alive and from onStartup.
+- chrome:// and Web Store pages refuse chrome.scripting; that surfaces as a
+  normal tool failure the model reports instead of retrying forever.
+- screen_text: GetWindowText on another process's CHILD controls returns
+  empty — you need SendMessageTimeoutW(hwnd, WM_GETTEXT, ...) instead, and
+  SendMessageTimeoutW must get argtypes set first, otherwise ctypes passes
+  the buffer pointer as a 32-bit int and truncates it on Win64.
+- Mouse input reuses the same 40-byte INPUT union; absolute moves need
+  MOUSEEVENTF_ABSOLUTE|MOUSEEVENTF_VIRTUALDESK with 0..65535 coords scaled
+  over the virtual screen (SM_XVIRTUALSCREEN etc., metrics 76..79).
 
 Capture-hiding details
 ----------------------

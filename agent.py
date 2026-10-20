@@ -4,10 +4,10 @@ commands, manage files, open apps, control windows, and type.
 
 Safety model
 ------------
-- Read-only tools (system_info, processes, list_dir, read_file, search_files,
-  window_list, volume get) never ask.
-- Side-effect tools (run, open, window_hide/show, send_keys, volume set)
-  ask for approval in the default "ask" mode; "auto" skips the prompt, but
+- Read-only tools (system_info, screen_text, mouse move/scroll, chrome
+  extract, ...) never ask.
+- Side-effect tools (run, open, window_hide/show, send_keys, volume set,
+  mouse click, chrome actions) ask for approval in the default "ask" mode; "auto" skips the prompt, but
   destructive-looking shell commands ALWAYS ask, even in auto mode.
 - Every action is shown in the dock panel and appended to actions.log.
 
@@ -111,7 +111,8 @@ def is_dangerous(cmd):
 
 
 READ_ONLY = {"system_info", "processes", "list_dir", "read_file",
-             "search_files", "window_list", "volume_get"}
+             "search_files", "window_list", "volume_get", "screen_text",
+             "mouse_move", "mouse_scroll"}
 
 
 def gate(tool, args, mode):
@@ -120,6 +121,9 @@ def gate(tool, args, mode):
         return "block"
     if tool == "run" and is_dangerous(args.get("cmd", "")):
         return "confirm"                      # destructive: always ask
+    if tool == "chrome" and \
+            str(args.get("action", "extract")).lower() == "extract":
+        return "allow"                        # reading a page is harmless
     if tool in READ_ONLY:
         return "allow"
     if mode == "auto":
@@ -672,6 +676,228 @@ def tool_send_keys(args):
     return "typed %d events into the focused window" % sent
 
 
+# --- mouse -------------------------------------------------------------------
+
+INPUT_MOUSE = 0
+MOUSEEVENTF_MOVE = 0x0001
+MOUSEEVENTF_LEFTDOWN = 0x0002
+MOUSEEVENTF_LEFTUP = 0x0004
+MOUSEEVENTF_RIGHTDOWN = 0x0008
+MOUSEEVENTF_RIGHTUP = 0x0010
+MOUSEEVENTF_MIDDLEDOWN = 0x0020
+MOUSEEVENTF_MIDDLEUP = 0x0040
+MOUSEEVENTF_WHEEL = 0x0800
+MOUSEEVENTF_VIRTUALDESK = 0x4000
+MOUSEEVENTF_ABSOLUTE = 0x8000
+
+_BUTTON_FLAGS = {
+    "left": (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP),
+    "right": (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP),
+    "middle": (MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP),
+}
+
+
+class _POINT(ctypes.Structure):
+    _fields_ = [("x", wt.LONG), ("y", wt.LONG)]
+
+
+def _mouse(flags, dx=0, dy=0, data=0):
+    arr = (_INPUT * 1)()
+    arr[0].type = INPUT_MOUSE
+    arr[0].mi = _MOUSEINPUT(int(dx), int(dy), int(data) & 0xFFFFFFFF,
+                            int(flags), 0, 0)
+    return user32.SendInput(1, arr, ctypes.sizeof(_INPUT))
+
+
+def _cursor_pos():
+    p = _POINT()
+    user32.GetCursorPos(ctypes.byref(p))
+    return p.x, p.y
+
+
+def _to_absolute(x, y):
+    """screen px -> SendInput 0..65535 coords on the virtual desktop"""
+    vx, vy = user32.GetSystemMetrics(76), user32.GetSystemMetrics(77)
+    vw, vh = max(user32.GetSystemMetrics(78), 1), max(user32.GetSystemMetrics(79), 1)
+    return (int((x - vx) * 65535 / max(vw - 1, 1)),
+            int((y - vy) * 65535 / max(vh - 1, 1)))
+
+
+def _move_to(args):
+    """Move the cursor if the args carry x/y (absolute) — returns pos."""
+    if "x" in args or "y" in args:
+        x, y = int(args.get("x", 0)), int(args.get("y", 0))
+        ax, ay = _to_absolute(x, y)
+        _mouse(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE |
+               MOUSEEVENTF_VIRTUALDESK, ax, ay)
+        time.sleep(0.05)
+        return x, y
+    if "dx" in args or "dy" in args:
+        _mouse(MOUSEEVENTF_MOVE, int(args.get("dx", 0)), int(args.get("dy", 0)))
+        time.sleep(0.03)
+    return _cursor_pos()
+
+
+def tool_mouse_move(args):
+    x, y = _move_to(args)
+    return "cursor at %d,%d" % (x, y)
+
+
+def tool_mouse_click(args):
+    button = str(args.get("button") or "left").lower()
+    flags = _BUTTON_FLAGS.get(button)
+    if flags is None:
+        return "unknown button %r (use left, right or middle)" % button
+    x, y = _move_to(args)
+    double = bool(args.get("double"))
+    for _ in range(2 if double else 1):
+        _mouse(flags[0])
+        time.sleep(0.04)
+        _mouse(flags[1])
+        time.sleep(0.05)
+    _log_action("CLICK %s%s at %d,%d" % (button, " x2" if double else "", x, y))
+    return "%s%s clicked at %d,%d" % (button, " double" if double else "",
+                                      x, y)
+
+
+def tool_mouse_scroll(args):
+    clicks = int(args.get("dy", -3))
+    at_point = "x" in args or "y" in args
+    if at_point:
+        x, y = _move_to(args)
+    _mouse(MOUSEEVENTF_WHEEL, 0, 0, clicks * 120)
+    if at_point:
+        return "scrolled %d clicks at %d,%d" % (clicks, x, y)
+    return "scrolled %d clicks" % clicks
+
+
+# --- screen reading ----------------------------------------------------------
+
+WM_GETTEXT = 0x000D
+
+try:
+    user32.SendMessageTimeoutW.argtypes = [wt.HWND, ctypes.c_uint,
+                                           ctypes.c_size_t, ctypes.c_void_p,
+                                           ctypes.c_uint, ctypes.c_uint,
+                                           ctypes.c_void_p]
+    user32.SendMessageTimeoutW.restype = ctypes.c_size_t
+except (AttributeError, OSError):
+    pass
+
+
+def _exe_of(pid):
+    try:
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+    except (AttributeError, OSError):
+        pass
+    h = kernel32.OpenProcess(0x1000, False, int(pid))   # QUERY_LIMITED_INFO
+    if not h:
+        return ""
+    try:
+        size = wt.DWORD(512)
+        buf = ctypes.create_unicode_buffer(512)
+        if kernel32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
+            return os.path.basename(buf.value)
+    finally:
+        kernel32.CloseHandle(h)
+    return ""
+
+
+def tool_screen_text(args):
+    """What is the window in front showing? Title + its control text."""
+    fg = user32.GetForegroundWindow()
+    if not fg:
+        return "nothing is in front"
+    n = user32.GetWindowTextLengthW(fg)
+    tbuf = ctypes.create_unicode_buffer(n + 1)
+    user32.GetWindowTextW(fg, tbuf, len(tbuf))
+    pid = wt.DWORD()
+    user32.GetWindowThreadProcessId(fg, ctypes.byref(pid))
+    lines = ["FOCUSED: '%s' [%s] hwnd=%d" % (
+        (tbuf.value or "(untitled)")[:90], _exe_of(pid.value) or "?", fg)]
+
+    texts = []
+    EnumChild = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+
+    def child_cb(ch, _l):
+        if user32.IsWindowVisible(ch):
+            buf = ctypes.create_unicode_buffer(512)
+            sent = ctypes.c_size_t()
+            if user32.SendMessageTimeoutW(ch, WM_GETTEXT, 511, buf,
+                                          0x0002, 200,  # SMTO_ABORTIFHUNG
+                                          ctypes.byref(sent)) and buf.value.strip():
+                t = " ".join(buf.value.split())
+                if t and t not in texts:
+                    texts.append(t)
+        return True
+    user32.EnumChildWindows(fg, EnumChild(child_cb), 0)
+
+    others = []
+
+    def top_cb(hwnd, _l):
+        if hwnd != fg and user32.IsWindowVisible(hwnd):
+            nn = user32.GetWindowTextLengthW(hwnd)
+            if nn > 0:
+                b = ctypes.create_unicode_buffer(nn + 1)
+                user32.GetWindowTextW(hwnd, b, len(b))
+                if b.value.strip():
+                    others.append(b.value[:70])
+        return True
+    user32.EnumWindows(ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)(
+        top_cb), 0)
+
+    if texts:
+        lines.append("on screen: " + " | ".join(texts)[:3000])
+    if others:
+        lines.append("also open: " + ", ".join(others[:8]))
+    return "\n".join(lines)[:RESULT_CAP]
+
+
+# --- browser control (Chrome extension bridge) -------------------------------
+
+CHROME_OPS = ("extract", "open", "search", "click", "type", "press", "scroll")
+
+
+def tool_chrome(args):
+    import browserlink
+    action = str(args.get("action") or "extract").lower().strip()
+    if action not in CHROME_OPS:
+        return "unknown chrome action %r; use one of: %s" % (
+            action, ", ".join(CHROME_OPS))
+    cmd = {"op": action}
+    for key in ("url", "query", "text", "selector", "key", "dy"):
+        if args.get(key) not in (None, ""):
+            cmd[key] = args[key]
+    if action in ("open", "search") and not browserlink.connected():
+        url = (browserlink.search_url(cmd.get("query", ""))
+               if action == "search" else str(cmd.get("url") or ""))
+        if not url:
+            return "chrome %s needs a %s" % (action, action)
+        tool_open({"target": url})
+        _log_action("CHROME %s %s (default browser - extension offline)"
+                    % (action, url[:80]))
+        return ("opened in the default browser, but the ShhDock Chrome "
+                "extension is not connected so I can't read the page back. "
+                + browserlink.install_steps())
+    if not browserlink.connected():
+        for _ in range(6):                       # give it a few seconds
+            time.sleep(0.5)                      # to show up
+            if browserlink.connected():
+                break
+        else:
+            return ("chrome %s failed: the extension is not connected - is "
+                    "Chrome open with 'ShhDock Browser Link' enabled in "
+                    "chrome://extensions? %s" % (action,
+                                                 browserlink.install_steps()))
+    res = browserlink.send(cmd, timeout=25)
+    ok = bool(res.get("ok"))
+    out = (res.get("out") or "").strip() or ("chrome %s done" % action)
+    _log_action("CHROME %s -> %s" % (action, "ok" if ok else "fail"))
+    if not ok:
+        return "chrome %s failed: %s" % (action, out)
+    return out[:RESULT_CAP]
+
+
 _MMDEV_CLSID = "{BCDE0395-E52F-467C-8E3D-C4579291692E}"   # MMDeviceEnumerator
 _IID_IMMDEVICE_ENUM = "{A95664D2-9614-4F35-A746-DE8DB63617E6}"
 _IAUDIO_EPVOL = "{5CDF2C82-841E-4546-9722-0CF74078229A}"
@@ -789,6 +1015,19 @@ TOOLS = {
                   "type text into the focused window (asks permission)"),
     "volume": (tool_volume, '{"action": "get or set 40"}',
                "read or set the master speaker volume"),
+    "screen_text": (tool_screen_text, "{}",
+                    "read the text the window in front is showing"),
+    "mouse_move": (tool_mouse_move, '{"x": 600, "y": 300} or {"dx": 20, "dy": 0}',
+                   "move the mouse cursor"),
+    "mouse_click": (tool_mouse_click,
+                    '{"x": 600, "y": 300, "button": "left", "double": false}',
+                    "click at a point (asks permission)"),
+    "mouse_scroll": (tool_mouse_scroll, '{"dy": -3}',
+                     "scroll the mouse wheel"),
+    "chrome": (tool_chrome,
+               '{"action": "extract|open|search|click|type|press|scroll", '
+               '"url/query/text/selector/key/dy": "..."}',
+               "drive Chrome through the extension (most actions ask)"),
 }
 
 
@@ -821,6 +1060,20 @@ def summary_for(name, args):
         return "list: %s" % args.get("path", "")[:80]
     if name == "search_files":
         return "search: %s" % args.get("query", "")[:60]
+    if name == "screen_text":
+        return "read what's on screen"
+    if name == "mouse_move":
+        return "move mouse to %s,%s" % (args.get("x", "?"), args.get("y", "?"))
+    if name == "mouse_scroll":
+        return "scroll %s" % args.get("dy", -3)
+    if name == "mouse_click":
+        return "click %s at %s,%s" % (args.get("button", "left"),
+                                      args.get("x", "?"), args.get("y", "?"))
+    if name == "chrome":
+        detail = (args.get("query") or args.get("url") or args.get("text") or
+                  args.get("selector") or args.get("key") or "")
+        return "chrome %s %s" % (args.get("action", "extract"),
+                                 str(detail)[:60])
     return name
 
 
@@ -850,6 +1103,15 @@ open {"target":"app or URL or path"} - open something
 run {"cmd":"PowerShell command"} - run a command (always asks permission)
 send_keys {"text":"type this {enter}"} - type into the focused window (asks)
 volume {"action":"get or set 40"} - master speaker volume
+screen_text {} - read what the window in front of you is showing
+mouse_move {"x":600,"y":300} or {"dx":20,"dy":0} - move the cursor
+mouse_scroll {"dy":-3} - scroll the wheel (these two need no permission)
+mouse_click {"x":600,"y":300,"button":"left"} - click there (asks permission)
+chrome {"action":"extract"} - read the active Chrome tab (read-only)
+chrome {"action":"search","query":"..."} - Google it in a new tab (asks)
+chrome {"action":"open","url":"https://..."} / {"action":"click","text":"link"} /
+  {"action":"type","text":"hi"} / {"action":"press","key":"Enter"} /
+  {"action":"scroll","dy":-600} - drive Chrome through the extension (asks)
 After a call you will receive TOOL RESULT. Then either call another tool or
 answer in plain text. One tool per message. Never invent tool results. If a
 tool was declined, do not retry it - answer a different way.

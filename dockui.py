@@ -464,7 +464,7 @@ class Dock(tk.Tk):
         win = tk.Toplevel(self)
         win.title("ShhDock settings")
         win.configure(bg=PANEL)
-        win.geometry("520x756")
+        win.geometry("520x872")
         win.resizable(False, False)
         self.settings_win = win
         win.protocol("WM_DELETE_WINDOW", lambda: self._close_settings(win))
@@ -635,6 +635,24 @@ class Dock(tk.Tk):
                                     highlightthickness=0)
         self.call_meter.pack(side="right")
 
+        # Browser link (Chrome extension)
+        body = self._section(win, "Browser link  ·  control Chrome")
+        row = tk.Frame(body, bg=PANEL2)
+        row.pack(fill="x", padx=10)
+        self.link_status = tk.Label(row, text="checking…", bg=PANEL2,
+                                    fg=MUTED, font=FONT_S)
+        self.link_status.pack(side="left")
+        _flat_button(row, "Install extension",
+                     self._install_ext).pack(side="right")
+        tk.Label(body, text="Load the ShhDock extension once: open "
+                 "chrome://extensions → Developer mode → Load unpacked → "
+                 "pick the folder that opens. Then the agent can read the "
+                 "open page, Google things, click and type. Everything stays "
+                 "on 127.0.0.1.",
+                 bg=PANEL2, fg=MUTED, font=FONT_S, anchor="w", justify="left",
+                 wraplength=470).pack(fill="x", padx=10, pady=(2, 4))
+        self._poll_link_status(win)
+
         # Privacy
         body = self._section(win, "Privacy")
         row = tk.Frame(body, bg=PANEL2)
@@ -703,6 +721,46 @@ class Dock(tk.Tk):
         if self.settings.get("call_listen"):
             self._stop_call()
             self._start_call()
+
+    def _install_ext(self):
+        """Open the extension folder (and keep it refreshed from the app)."""
+        import os
+        try:
+            import browserlink
+            path = browserlink.extension_dir()      # copies the latest files
+            os.startfile(path)
+        except Exception as exc:
+            self._log("meta", "(extension folder failed: %s)" % exc)
+
+    def _poll_link_status(self, win):
+        """Live 'connected / waiting' light for the Browser link section."""
+        if not win.winfo_exists():
+            return
+        if hasattr(self, "link_status"):
+            try:
+                import browserlink
+                browserlink.start()
+                st = browserlink.status()
+                if st["connected"]:
+                    self.link_status.configure(text="● extension connected",
+                                               fg=GREEN)
+                elif st["running"]:
+                    self.link_status.configure(
+                        text="● waiting for Chrome (load the extension)",
+                        fg=AMBER)
+                else:
+                    self.link_status.configure(
+                        text="● bridge not running", fg=RED)
+            except Exception as exc:
+                try:
+                    self.link_status.configure(text="● %s" % str(exc)[:36],
+                                               fg=RED)
+                except tk.TclError:
+                    return
+        try:
+            win.after(1500, lambda: self._poll_link_status(win))
+        except tk.TclError:
+            pass
 
     def _start_call(self):
         self._set_handset(True)
@@ -1113,6 +1171,11 @@ class Dock(tk.Tk):
             self.assistant.start()
         except Exception as exc:
             self._set_status("mic failed: %s" % exc, RED)
+        try:
+            import browserlink
+            browserlink.start()          # local bridge for the Chrome ext
+        except Exception:
+            pass
         if self.settings.get("call_listen"):
             self._start_call()
 

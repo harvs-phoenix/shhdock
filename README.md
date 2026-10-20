@@ -2,7 +2,7 @@
 
 # 🫥 ShhDock
 
-### An always-on-top dock that's invisible to screen share — it answers, it operates your PC, and it hears your calls. All on your own machine.
+### An always-on-top dock that's invisible to screen share — it answers, it operates your PC, it drives your browser, and it hears your calls. All on your own machine.
 
 *Ask it anything. It hears you (and your teammates), thinks locally, and can actually do things for you — behind a yes/no gate you control.*
 
@@ -35,7 +35,7 @@ It also keeps the original tool around: the **🪟** button launches the window-
 
 ## It actually does things
 
-Type it or ask out loud: *"how much RAM am I using"*, *"open Discord"*, *"run a command that lists my top processes"*, *"hide this window from my stream"*. The local model calls real tools — system info, processes, file search, PowerShell, window capture-hiding, volume, typing — and answers with the results.
+Type it or ask out loud: *"how much RAM am I using"*, *"open Discord"*, *"run a command that lists my top processes"*, *"hide this window from my stream"*, *"google when daylight saving ends"*. The local model calls real tools — system info, processes, file search, PowerShell, window capture-hiding, volume, typing, mouse control and browser control — and answers with the results.
 
 Three modes in ⚙ settings:
 
@@ -48,6 +48,17 @@ Three modes in ⚙ settings:
 Every action is written to `actions.log`, and each step appears in the panel as it happens.
 
 <img src="assets/dock-agent.png" width="720" alt="Agent asking for permission to run a command">
+
+-----
+
+## Drive your browser — and your mouse
+
+*"google the price of the RTX 5060 Ti"*, *"what's on the page I have open"*, *"click the first result"*, *"move the mouse to the top left and scroll down"* — the agent can do that too:
+
+- **Chrome extension** (`shhdock/chromeext/`) — load it once via `chrome://extensions` → **Developer mode** → **Load unpacked** (Settings → Browser link → *Install extension* opens the right folder and shows a live ● connected light). It reads the active tab, opens/searches pages, clicks links by their text, types into boxes, presses keys and scrolls.
+- **Mouse tools** — move (absolute or relative), left/right/middle click, double click, wheel scroll. Clicking asks for permission like every other side effect.
+- **`screen_text`** — the model "sees" by reading the focused window: its title, process, and the text of every visible control, plus what else is open. (Local models are text-only, so it reads the screen instead of looking at pixels.)
+- **Everything stays on `127.0.0.1`.** The extension and the dock talk over a localhost bridge with an Origin check; no web service, no account, nothing off the machine. Reading a page never asks; clicking/typing/searching does.
 
 -----
 
@@ -87,6 +98,7 @@ You can override it anytime — **Auto**, a **preset**, or a **custom** RAM numb
 - **The mic is visible.** The dock shows a live level meter and a status word (`listening`, `thinking…`) whenever it's capturing. There's no silent mode.
 - **Call listening is opt-in and visible.** The 📞 indicator is green only while it's transcribing, the toggle is one click away, and the transcript never leaves your PC.
 - **The agent asks before it acts.** In the default mode nothing runs without your click; the full action log lives in `actions.log`.
+- **The browser link is local-only.** The Chrome extension talks to `127.0.0.1` and nothing else; uninstall it from `chrome://extensions` whenever you like.
 - **Everything is local.** Speech recognition, the chat model, and every tool run on your machine. No account, no telemetry, no server.
 - **It only hears while it's running.** Close the dock and the microphone and call streams stop.
 
@@ -103,7 +115,7 @@ You can override it anytime — **Auto**, a **preset**, or a **custom** RAM numb
 | **the text box** | Type anything — questions *and* commands ("run Get-Date", "open Discord") |
 | **📞** | Hear your calls: transcribe Discord / Zoom / game audio |
 | **🪟** | Launch the hide-other-windows tool |
-| **⚙** | Settings: RAM/model, mic, GPU, agent mode, call listening, capture-hiding |
+| **⚙** | Settings: RAM/model, mic, GPU, agent mode, call listening, browser link, capture-hiding |
 | **✕** or right-click | Quit and release the mic |
 
 In settings, **Answer questions only** (default) ignores stray chatter and only replies to real questions. Flip it to **Answer everything I say** if you'd rather it respond to every sentence.
@@ -131,7 +143,8 @@ To build the exe yourself:
 ```powershell
 pip install pyinstaller pillow
 py -m PyInstaller --onefile --noconsole --icon shhdock.ico `
-  --name ShhDock --collect-all vosk --collect-all sounddevice shhdock.py
+  --name ShhDock --collect-all vosk --collect-all sounddevice `
+  --add-data "chromeext;chromeext" shhdock.py
 ```
 
 </details>
@@ -145,6 +158,7 @@ py -m PyInstaller --onefile --noconsole --icon shhdock.ico `
 - **Chat** — llama.cpp's `llama-server` over its local OpenAI-compatible HTTP API, with the model sized to your RAM.
 - **Agent** — a text-JSON tool protocol (`{"tool":"run","args":{...}}`) any model tier can emit, a safety gate (read-only vs side-effecting; a danger-pattern regex that always prompts, even in full-auto), and raw-ctypes Win32 tools: Toolhelp32 process snapshots, `SendInput` typing, `ShellExecuteW`, PowerShell with output caps, `IAudioEndpointVolume` for volume — plus a live system snapshot injected into every prompt.
 - **Call listening** — raw WASAPI loopback through ctypes COM (`IAudioClient` with `AUDCLNT_STREAMFLAGS_LOOPBACK`): captures whatever the selected output device plays, then runs the same VAD + Vosk pipeline as the mic with its own utterance state.
+- **Browser link** — a loopback-only HTTP bridge (`browserlink.py`, port 8765): the MV3 extension long-polls for commands, runs them in the active tab via `chrome.scripting`, and posts page text back — so a text-only local model can read and drive Chrome. Origin-checked so no web page can reach it.
 - **UI** — a single always-on-top tkinter frame that grows a panel downward. No background thread ever touches tkinter; everything flows through one event queue drained by `after()`.
 
 <div align="center">

@@ -35,7 +35,7 @@ LLAMA_DL = "https://github.com/ggml-org/llama.cpp/releases/download"
 LLAMA_NIGHTLY_TXT = ("https://github.com/ggml-org/llama.cpp/releases/"
                      "latest/download/nightly-tag.txt")
 
-USER_AGENT = "ShhDock/1.1 (+local voice assistant with agent tools)"
+USER_AGENT = "ShhDock/1.2 (+local voice assistant with agent tools)"
 CHAT_PORT = 8654
 
 # --- model catalog -----------------------------------------------------------
