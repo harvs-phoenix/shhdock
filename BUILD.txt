@@ -1,0 +1,68 @@
+ShhDock — build notes
+=====================
+
+Requirements
+------------
+- Python 3.10+ on Windows 10/11 (64-bit), tested on 3.14
+- pip install vosk sounddevice numpy
+- for the exe: pip install pyinstaller
+
+Run from source
+---------------
+    python shhdock.py
+
+First run opens the setup wizard, which downloads:
+- llama.cpp nightly CPU binaries (~19 MB zip)
+- vosk small English voice model (~40 MB)
+- the chat model sized to your RAM (e.g. Qwen2.5 3B Q4_K_M ~2.0 GB)
+
+Everything lands in %LOCALAPPDATA%\ShhDock.
+
+Build the exe
+-------------
+    py -m PyInstaller --onefile --noconsole --icon shhdock.ico ^
+        --name ShhDock --collect-all vosk --collect-all sounddevice shhdock.py
+
+Output: dist\ShhDock.exe (or build_out\ShhDock.exe if you pass --distpath).
+
+--collect-all vosk is required: vosk is imported lazily inside the mic
+thread, so PyInstaller cannot detect it statically. Same for sounddevice.
+
+Tests
+-----
+tests\ contains the full suite (run in order):
+
+    py tests\test_logic.py       RAM tiers, question gate, catalog
+    py tests\test_urls.py        every download URL HEAD-checks
+    py tests\test_install.py     real first-run install (downloads ~2 GB)
+    py tests\test_llm.py         llama.cpp server + real chat completion
+    py tests\test_stt.py         vosk transcribes a known wav (no mic needed)
+    py tests\test_assistant.py   full stack: real mic + real model + answers
+    py tests\test_dock.py        dock UI, capture-hiding verification
+    py tests\test_exe.py         launches the built exe and closes it
+    py tests\shots.py            regenerates all README screenshots
+
+GPU mode
+--------
+Settings has an experimental "Use GPU" toggle. It downloads the CUDA 13.4
+build of llama.cpp (plus the CUDA runtime zip) and starts the server with
+-ngl 99. Leave it off while gaming — a CPU model doesn't fight your GPU
+for VRAM, and a 3B Q4 model is already fast on a modern 8-core.
+
+Capture-hiding details
+----------------------
+SetWindowDisplayAffinity only works on windows owned by the calling
+process, and only on a real top-level HWND. tkinter's winfo_id() returns a
+child wrapper window (setting WDA on it fails with error 87), and before
+the window is mapped that handle is a placeholder that Tk later replaces —
+a WDA call on it can "succeed" and then evaporate.
+
+ShhDock therefore:
+1. waits ~300 ms after the mainloop starts (window is mapped),
+2. applies WDA to the window and its parent,
+3. reads the effective affinity back with GetWindowDisplayAffinity,
+4. retries every 150 ms until it reads 0x11.
+
+This is also why screenshots of the dock need the affinity lifted first —
+ImageGrab uses the same capture path Discord does, which is exactly the
+point.

@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+build/
+build_tmp/
+build_out/
+dist/
+*.spec
+assets/*.tmp
+tests/*.png
